@@ -16,58 +16,72 @@ hook=sy.TorchHook(torch)
 def FedAvg(model,server,clients,X,y,iter_max,epochs,epsilon,
     loss_f=nn.MSELoss()):
     
-    #NN model structure used by the clients and the server
-    #server virtualworker created for the server
-    #clients list of the K virtual workers Ck
-    #X list of the K clients feature dataset Xk
-    #y list of the K clients feature dataset yk
-    #iter_max: integer. Maximal server iterations number
-    #epochs: integer. Number of epochs run on the client side.
-    #epsilon: float. Does a step if its loss improvment is superior to epsilon
-    #loss_f: loss function used
+    """
+    NN model structure used by the clients and the server
+    server virtualworker created for the server
+    clients list of the K virtual workers Ck
+    X list of the K clients feature dataset Xk
+    y list of the K clients feature dataset yk
+    iter_max: integer. Maximal server iterations number
+    epochs: integer. Number of epochs run on the client side.
+    epsilon: float. Does a step if its loss improvment is superior to epsilon
+    loss_f: loss function used
+    
+    
+    returns :
+        - Global model of the server : Pytorch NN
+        - Loss history of the clients and the server : list
+        - Model Parameters evolution : list
+    """
         
     #Variables initialization
-    K=len(clients)
+    K=len(clients) #number of clients
     
+    
+    #Checking the quality of the input
     if len(X)!=K or len(y)!=K:
         print("The dimension of clients, X, and y is not the same")
     
     
-    X_sent=[]
-    y_sent=[]
-    for i in range(K):
-        
-        
-        X_sent.append(X[i].send(clients[i]))
-        y_sent.append(y[i].send(clients[i]))
-
-    #metrics we are interested in
+    #Metrics we are interested in 
     loss_hist=[]
     a_hist=[]
     b_hist=[]
     
+    
+    #Send each dataset to the associated client    
+    X_sent=[]
+    y_sent=[]
+    for k in range(K):
+        X_sent.append(X[k].send(clients[k]))
+        y_sent.append(y[k].send(clients[k]))
+    
+    
     #Variables initialization
-    precision=100
-    i=0
+    precision=100 #Loss variation from one step to another
+    i=0 #iteration number
     
     while precision>epsilon and i<iter_max:
         
-        
+        #List containing the model sent to each client
         models=[]
+        #List containing the optimizers of each client
         optimizers=[]
+        
         for client in clients:
             models+=[model.copy().send(client)]
             optimizers+=[optim.SGD(params=models[-1].parameters(),lr=0.1)]
         
+        
         for j in range(epochs):
             
+            #Losses of each client when they have finished updating a local model
             clients_losses=[]
             
             
+            #Update each client
             for k in range(K):
-                
             
-                # Train Bob's Model
                 optimizers[k].zero_grad()
                 y_pred = models[k](X_sent[k])
                 client_loss = loss_f(y_pred,y_sent[k])
@@ -80,14 +94,19 @@ def FedAvg(model,server,clients,X,y,iter_max,epochs,epsilon,
 
         loss_hist.append(clients_losses)
         
+        
         try:precision=(sum(loss_hist[-1])-sum(loss_hist[-2]))**2
         except:pass
         
+    
+        #Upload on the server the client's model
         for model_k in models:
             model_k.move(server)
     
+        
         with torch.no_grad():
             
+            #Save each client's model parameters
             clients_a=[]
             clients_b=[]
             new_weight=0*model.weight.data
@@ -107,23 +126,21 @@ def FedAvg(model,server,clients,X,y,iter_max,epochs,epsilon,
             a_hist.append(clients_a)
             b_hist.append(clients_b)
             
+            
+            #The server creates the new global model
             new_weight/=K
             new_bias/=K
             
-
             model.weight.set_(new_weight)
             model.bias.set_(new_bias)
         
         if i%10==0:
-            print("iteration "+str(i))
-            print(model.weight.data.numpy(),model.bias.data.numpy())
-            print("C1:" + str(clients_losses[0]) + " C2:" + str(clients_losses[1]))
-            print(precision)
+            print("iteration "+str(i)+", Model Loss:"+ str(sum(loss_hist[-1])))
         
         i+=1
 
 
-    return loss_hist,a_hist,b_hist
+    return model,np.array(loss_hist),np.array(a_hist),np.array(b_hist)
 
 
 
