@@ -33,117 +33,116 @@ def FedAvg(model,server,clients,X,y,iter_max,epochs,epsilon,
         print("The dimension of clients, X, and y is not the same")
     
     
-    C1=clients[0]
-    C2=clients[1]
-    dim=100
-    X1=torch.rand(dim, 1) 
-    X2=torch.rand(dim,1)
-    
-    a_1,b_1=5,-1
-    a_2,b_2=4,-1.2
-    y1=a_1*X1+b_1+0.5*torch.randn(dim,1)
-    y2=a_2*X2+b_2+0.5*torch.randn(dim,1)
-    
-    C1_x = X1.send(C1)
-    C1_y = y1.send(C1)
-    
-    C2_x = X2.send(C2)
-    C2_y = y2.send(C2)
+    X_sent=[]
+    y_sent=[]
+    for i in range(K):
+        
+        
+        X_sent.append(X[i].send(clients[i]))
+        y_sent.append(y[i].send(clients[i]))
 
     #metrics we are interested in
-    C1_loss_hist=[]
-    C2_loss_hist=[]
-    S_loss_hist=[]
-    C1_a_grad=[]
-    C1_b_grad=[]
-    C2_a_grad=[]
-    C2_b_grad=[]
+    loss_hist=[]
+    a_hist=[]
+    b_hist=[]
     
     #Variables initialization
     precision=100
     i=0
     
     while precision>epsilon and i<iter_max:
-        C1_model = model.copy().send(C1)
-        C2_model = model.copy().send(C2)
         
-        C1_opt = optim.SGD(params=C1_model.parameters(),lr=0.1)
-        C2_opt = optim.SGD(params=C2_model.parameters(),lr=0.1)
+        
+        models=[]
+        optimizers=[]
+        for client in clients:
+            models+=[model.copy().send(client)]
+            optimizers+=[optim.SGD(params=models[-1].parameters(),lr=0.1)]
         
         for j in range(epochs):
             
-            # Train Bob's Model
-            C1_opt.zero_grad()
-            C1_pred = C1_model(C1_x)
-            C1_loss = loss_f(C1_pred,C1_y)
-            C1_loss.backward()
-    
-            C1_opt.step()
-            C1_loss = C1_loss.get().data
+            clients_losses=[]
+            
+            
+            for k in range(K):
+                
+            
+                # Train Bob's Model
+                optimizers[k].zero_grad()
+                y_pred = models[k](X_sent[k])
+                client_loss = loss_f(y_pred,y_sent[k])
+                client_loss.backward()
+        
+                optimizers[k].step()
+                
+                clients_losses.append(client_loss.get().data.numpy())
                     
-            # Train Alice's Model
-            C2_opt.zero_grad()
-            C2_pred = C2_model(C2_x)
-            C2_loss = loss_f(C2_pred,C2_y)
-            C2_loss.backward()
-    
-            C2_opt.step()
-            C2_loss = C2_loss.get().data
+
+        loss_hist.append(clients_losses)
         
-        C1_loss_hist+=[C1_loss.numpy()]
-        C2_loss_hist+=[C2_loss.numpy()]
-        S_loss_hist+=[(C1_loss.numpy()+C2_loss.numpy())/2]
-        
-        try:precision=(S_loss_hist[-1]-S_loss_hist[-2])**2
+        try:precision=(sum(loss_hist[-1])-sum(loss_hist[-2]))**2
         except:pass
         
-        C1_model.move(server)
-        C2_model.move(server)
+        for model_k in models:
+            model_k.move(server)
     
         with torch.no_grad():
             
-            C1_weight=C1_model.weight.clone().get()
-            C2_weight=C2_model.weight.clone().get()
+            clients_a=[]
+            clients_b=[]
+            new_weight=0*model.weight.data
+            new_bias=0*model.bias.data
+            for model_k in models: 
+                mod_weight=model_k.weight.get().data
+                mod_bias=model_k.bias.get().data
+                
+                
+                clients_a.append(np.reshape(mod_weight.numpy(),1))
+                clients_b.append(mod_bias.numpy())
+                
+                new_weight+=mod_weight
+                new_bias+=mod_bias
+
             
-            C1_bias=C1_model.bias.clone().get()
-            C2_bias=C2_model.bias.clone().get()  
+            a_hist.append(clients_a)
+            b_hist.append(clients_b)
             
-            C1_a_grad+=[np.reshape(C1_weight.grad.numpy(),1)]
-            C1_b_grad+=[C1_bias.grad.numpy()]
+            new_weight/=K
+            new_bias/=K
             
-            C2_a_grad+=[np.reshape(C2_weight.grad.numpy(),1)]
-            C2_b_grad+=[C2_bias.grad.numpy()]        
-            
-            new_weight=((C1_weight.data + C2_weight.data) / 2)
-            new_bias=((C1_bias.data + C2_bias.data) / 2)
-            
+
             model.weight.set_(new_weight)
             model.bias.set_(new_bias)
         
         if i%10==0:
             print("iteration "+str(i))
             print(model.weight.data.numpy(),model.bias.data.numpy())
-            print("C1:" + str(C1_loss.detach().numpy()) + " C2:" + str(C2_loss.detach().numpy()))
+            print("C1:" + str(clients_losses[0]) + " C2:" + str(clients_losses[1]))
             print(precision)
         
         i+=1
 
 
-    get_loss(C1_loss_hist,C2_loss_hist,S_loss_hist)
-    gradients_plot(C1_a_grad,C2_a_grad,C1_b_grad,C2_b_grad)
-    gradient_ratio_plot(C1_a_grad,C2_a_grad,C1_b_grad,C2_b_grad)
+    return loss_hist,a_hist,b_hist
 
 
 
 
 
-def get_loss(C1_loss_hist,C2_loss_hist,S_loss_hist):
+def get_loss(loss_hist):
 
 
     plt.figure(figsize=(15,6))
-    plt.plot(C1_loss_hist,label="C1 Loss")
-    plt.plot(C2_loss_hist,label="C2 Loss")
-    plt.plot(S_loss_hist,label="Server Loss")
+    
+    for k in range(len(loss_hist[0])):
+        
+        Ck_loss=[loss_hist[i][k]for i in range(len(loss_hist))]
+    
+        plt.plot(Ck_loss,label="C"+str(k+1)+" Loss")
+        
+    Server_loss=[np.mean(step_loss) for step_loss in loss_hist ]   
+    plt.plot(Server_loss,label="Server Loss")
+    
     plt.title("Loss of the different clients and server at a given iteration")
     plt.xlabel("Server iteration")
     plt.ylabel("Loss")
@@ -151,42 +150,63 @@ def get_loss(C1_loss_hist,C2_loss_hist,S_loss_hist):
     
     
 
-def gradients_plot(C1_a_grad,C2_a_grad,C1_b_grad,C2_b_grad):
+def weights_plot(a_hist,b_hist):
     plt.figure(figsize=(20,10))
     
     plt.subplot(1,2,1)
-    plt.plot(C1_a_grad,label="C1")
-    plt.plot(C2_a_grad,label="C2")
-    plt.title("Weight clients' gradient evolution")
+    
+    for k in range(len(a_hist[0])):
+        
+        Ck_a=[a_hist[i][k]for i in range(len(a_hist))]
+        
+        plt.plot(Ck_a,label="C"+str(k+1))
+    
+    S_a=[np.mean(a) for a in a_hist]
+    plt.plot(S_a,label="Server")
+        
+    plt.title("Clients' weight evolution")
     plt.xlabel("Iterations")
-    plt.ylabel("Gradient value")
+    plt.ylabel("Weight value")
     plt.legend()
+    
     
     plt.subplot(1,2,2)
-    plt.plot(C1_b_grad,label="C1")
-    plt.plot(C2_b_grad,label="C2")
-    plt.title("Weight clients' gradient evolution")
+    for k in range(len(a_hist[0])):
+        
+        Ck_b=[b_hist[i][k]for i in range(len(b_hist))]
+        
+        plt.plot(Ck_b,label="C"+str(k+1))
+
+    S_b=[np.mean(b) for b in b_hist]
+    plt.plot(S_b,label="Server")
+    
+    plt.title("Clients' bias evolution")
     plt.xlabel("Iterations")
-    plt.ylabel("Gradient value")
+    plt.ylabel("Bias value")
     plt.legend()
     
     
     
-def gradient_ratio_plot(C1_a_grad,C2_a_grad,C1_b_grad,C2_b_grad):
+def gradient_ratio_plot(a_hist,b_hist):
 
     plt.figure(figsize=(20,10))
     
     plt.subplot(1,2,1)
-    plt.title("Weigth relationship for each iteration")
-    plt.scatter(C1_a_grad,C2_a_grad,c=[[i] for i in range(len(C1_a_grad))],cmap='plasma')
+    a1_hist=[a_hist[i][0] for i in range(len(a_hist))]
+    a2_hist=[a_hist[i][1] for i in range(len(a_hist))]    
+    plt.scatter(a1_hist,a2_hist,c=[[i] for i in range(len(a_hist))],cmap='plasma')
     plt.colorbar()
+    
+    plt.title("Weigth relationship for each iteration")
     plt.xlabel("Gradient Weight Client 1")
     plt.xlabel("Gradient Weight Client 2")
     
     plt.subplot(1,2,2)
-    plt.title("Bias relationship for each iteration")
-    plt.scatter(C1_b_grad,C2_b_grad,c=[[i] for i in range(len(C1_a_grad))],cmap='plasma')
+    b1_hist=[b_hist[i][0] for i in range(len(a_hist))]
+    b2_hist=[b_hist[i][1] for i in range(len(a_hist))]  
+    plt.scatter(b1_hist,b2_hist,c=[[i] for i in range(len(b_hist))],cmap='plasma')
     plt.colorbar()
+    plt.title("Bias relationship for each iteration")
     plt.xlabel("Gradient Bias Client 1")
     plt.xlabel("Gradient Bias Client 2")
 

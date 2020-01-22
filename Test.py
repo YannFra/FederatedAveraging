@@ -15,7 +15,6 @@ hook=sy.TorchHook(torch)
 
 from FedAvg import *
 
-
 # In[2]:
 
 
@@ -27,8 +26,8 @@ dim=100
 X1=torch.rand(dim, 1) 
 X2=torch.rand(dim,1)
 
-a_1,b_1=5,-1
-a_2,b_2=4,-1.2
+a_1,b_1=5,-2
+a_2,b_2=4,-1
 y1=a_1*X1+b_1+0.5*torch.randn(dim,1)
 y2=a_2*X2+b_2+0.5*torch.randn(dim,1)
 
@@ -60,4 +59,20 @@ epsilon=10**-10
 
 
 
-FedAvg(model,server,clients,features,labels,iter_max,epochs,epsilon)
+loss_hist,a_hist,b_hist=FedAvg(model,server,clients,features,labels,iter_max,epochs,epsilon)
+
+
+# In[2]:
+get_loss(loss_hist)
+# In[2]:
+weights_plot(a_hist,b_hist)
+# In[2]:
+gradient_ratio_plot(a_hist,b_hist)
+
+
+# In[2]:
+
+
+
+
+
